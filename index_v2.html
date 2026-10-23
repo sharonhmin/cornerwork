@@ -1,0 +1,1320 @@
+<!doctype html>
+<!--
+  CORNERWORK v2
+  GOAL: one phone-friendly place for a fighter to track a camp:
+    - Camp:    set up the fight (sport, weights, weigh-in and fight dates)
+    - Morning: 60-second check-in (weight, cycle, how you feel)
+    - Food:    log meals three ways (one-tap favorites, AI estimate, manual)
+    - Train:   log sessions (combat with parts, running, strength, other)
+    - History: the last 14 days, grouped by day
+  All data is saved to Supabase. The database rules make sure each athlete
+  only ever sees her own data.
+
+  A web page has three layers, like a house:
+    HTML  (this top part)     = the rooms: what is on the page
+    CSS   (inside <style>)    = the paint and furniture: how it looks
+    JavaScript (bottom part)  = the electricity: what happens when you tap
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="CornerWork">
+  <title>CornerWork</title>
+
+  <style>
+    /* ---------- COLORS: defined once, dark mode swaps them ---------- */
+    :root {
+      --bg: #f6f4f1;
+      --card: #ffffff;
+      --text: #1d1b19;
+      --muted: #6f6a64;
+      --line: #e3ded7;
+      --accent: #b8432f;
+      --accent-text: #ffffff;
+      --good: #2f7d4f;
+      --warn: #a86a12;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #141210;
+        --card: #1f1c19;
+        --text: #f1ede8;
+        --muted: #a29a91;
+        --line: #35302b;
+        --accent: #e0694f;
+        --accent-text: #141210;
+        --good: #5fbf85;
+        --warn: #e0a64f;
+      }
+    }
+
+    /* ---------- BASICS ---------- */
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }   /* "hidden" always wins */
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 17px;
+      line-height: 1.4;
+    }
+    main { max-width: 520px; margin: 0 auto; padding: 16px 16px 48px; }
+    h1 { font-size: 26px; margin: 8px 0 4px; }
+    h2 { font-size: 19px; margin: 0 0 12px; }
+    p.hint, span.hint { color: var(--muted); font-size: 14px; }
+    p.hint { margin: 4px 0 12px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .gap { height: 14px; }
+
+    /* ---------- FORM FIELDS: big tap targets ---------- */
+    label.field { display: block; font-weight: 600; margin-bottom: 6px; }
+    input[type=email], input[type=number], input[type=date], input[type=text], select, textarea {
+      width: 100%;
+      font-size: 17px;          /* 16px+ stops iPhones zooming in */
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--bg);
+      color: var(--text);
+    }
+    textarea { min-height: 70px; resize: vertical; }
+    .row { display: flex; gap: 8px; }
+    .row > * { flex: 1; }
+    .row > select.unit { flex: 0 0 90px; }
+
+    /* ---------- TAP-TO-PICK BUTTONS ---------- */
+    .choices { display: flex; flex-wrap: wrap; gap: 6px; }
+    .choices input { position: absolute; opacity: 0; pointer-events: none; }
+    .choices label {
+      flex: 1 0 auto;
+      min-width: 44px;
+      text-align: center;
+      padding: 10px 8px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      cursor: pointer;
+      user-select: none;
+      background: var(--bg);
+    }
+    .choices input:checked + label {
+      background: var(--accent);
+      color: var(--accent-text);
+      border-color: var(--accent);
+      font-weight: 700;
+    }
+    .scale-ends { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; margin-top: 4px; }
+    .rating { margin-bottom: 16px; }
+
+    /* ---------- BUTTONS ---------- */
+    button.primary, button.secondary {
+      width: 100%;
+      padding: 14px;
+      font-size: 18px;
+      font-weight: 700;
+      border-radius: 12px;
+      cursor: pointer;
+    }
+    button.primary { border: none; background: var(--accent); color: var(--accent-text); }
+    button.secondary { border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 16px; }
+    button.link {
+      background: none; border: none; color: var(--muted);
+      text-decoration: underline; font-size: 14px; cursor: pointer; padding: 0;
+    }
+    button.small {
+      border: 1px solid var(--line); background: var(--bg); color: var(--muted);
+      border-radius: 8px; padding: 4px 10px; font-size: 14px; cursor: pointer;
+    }
+
+    /* ---------- TABS ---------- */
+    nav.tabs {
+      display: flex; gap: 4px; margin: 12px 0 16px;
+      position: sticky; top: 0; background: var(--bg); padding: 8px 0; z-index: 1;
+    }
+    nav.tabs button {
+      flex: 1; padding: 10px 2px; font-size: 14px;
+      border: 1px solid var(--line); border-radius: 10px;
+      background: var(--card); color: var(--text); cursor: pointer;
+    }
+    nav.tabs button.active { background: var(--text); color: var(--bg); font-weight: 700; }
+
+    /* ---------- MESSAGES ---------- */
+    .message { margin-top: 10px; font-size: 15px; min-height: 1.2em; }
+    .message.ok { color: var(--good); }
+    .message.error { color: var(--accent); }
+    .topbar { display: flex; justify-content: space-between; align-items: baseline; }
+
+    /* ---------- FOOD ---------- */
+    .totals { display: flex; gap: 10px; }
+    .totals div { flex: 1; text-align: center; padding: 10px; background: var(--bg); border-radius: 10px; }
+    .totals strong { display: block; font-size: 24px; }
+    .totals span { color: var(--muted); font-size: 13px; }
+    .fav-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .fav {
+      display: flex; align-items: center; gap: 6px;
+      border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+      padding: 8px 10px; font-size: 15px; cursor: pointer; color: var(--text);
+    }
+    .fav small { color: var(--muted); }
+    .fav .remove { color: var(--accent); font-weight: 700; }
+    .entry { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+             border-bottom: 1px solid var(--line); padding: 8px 0; font-size: 15px; }
+    .entry:last-child { border-bottom: none; }
+    .entry span { color: var(--muted); }
+    .ai-note { font-size: 14px; color: var(--muted); margin-top: 8px; }
+
+    /* ---------- CAMP SUMMARY + HISTORY ---------- */
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .stat-grid div { background: var(--bg); border-radius: 10px; padding: 10px; }
+    .stat-grid strong { display: block; font-size: 20px; }
+    .stat-grid span { color: var(--muted); font-size: 13px; }
+    .verdict { margin-top: 10px; font-weight: 600; }
+    .verdict.ok { color: var(--good); }
+    .verdict.warn { color: var(--warn); }
+    .verdict.bad { color: var(--accent); }
+    .day h2 { margin-bottom: 6px; }
+    .day p { margin: 4px 0; font-size: 15px; }
+    .day .muted { color: var(--muted); }
+  </style>
+</head>
+
+<body>
+<main>
+
+  <!-- ============================================================
+       VIEW 1: LOGIN (shown when nobody is signed in)
+       ============================================================ -->
+  <section id="login-view" hidden>
+    <h1>CornerWork</h1>
+    <p class="hint">Weight, cycle, food and training in one place.</p>
+    <div class="card">
+      <h2>Sign in</h2>
+      <p class="hint">Enter your email and we'll send you a sign-in link. No password needed.</p>
+      <form id="login-form">
+        <input type="email" id="login-email" placeholder="you@example.com" required>
+        <div style="height:12px"></div>
+        <button class="primary" type="submit">Send me a link</button>
+      </form>
+      <div id="login-message" class="message"></div>
+    </div>
+  </section>
+
+
+  <!-- ============================================================
+       VIEW 2: THE APP (shown once signed in)
+       ============================================================ -->
+  <section id="app-view" hidden>
+    <div class="topbar">
+      <h1>CornerWork</h1>
+      <button class="link" id="logout-btn">Sign out</button>
+    </div>
+
+    <nav class="tabs">
+      <button data-tab="morning" class="active">Morning</button>
+      <button data-tab="food">Food</button>
+      <button data-tab="train">Train</button>
+      <button data-tab="history">History</button>
+      <button data-tab="camp">Camp</button>
+    </nav>
+
+
+    <!-- ================= TAB: MORNING CHECK-IN ================= -->
+    <form id="morning-form" data-panel="morning">
+      <p class="hint">Before eating or drinking, after the bathroom.</p>
+
+      <div class="card">
+        <label class="field" for="m-date">Date</label>
+        <input type="date" id="m-date" required>
+        <div class="gap"></div>
+        <label class="field" for="m-weight">Weight</label>
+        <div class="row">
+          <input type="number" id="m-weight" step="0.1" inputmode="decimal" placeholder="e.g. 61.4">
+          <select class="unit weight-unit" id="m-unit">
+            <option value="kg">kg</option>
+            <option value="lb">lb</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Cycle</h2>
+        <label class="field">Period today?</label>
+        <div class="choices" id="m-flow"></div>
+        <div class="gap"></div>
+        <label class="field">Any of these today?</label>
+        <div class="choices" id="m-symptoms"></div>
+      </div>
+
+      <div class="card">
+        <h2>How are you?</h2>
+        <p class="hint">1 = bad, 5 = good, for every question.</p>
+        <div class="rating"><label class="field">Sleep quality</label><div class="choices" id="m-sleep_quality"></div><div class="scale-ends"><span>terrible</span><span>great</span></div></div>
+        <div class="rating"><label class="field">Energy</label><div class="choices" id="m-energy"></div><div class="scale-ends"><span>exhausted</span><span>fresh</span></div></div>
+        <div class="rating"><label class="field">Soreness</label><div class="choices" id="m-soreness"></div><div class="scale-ends"><span>very sore</span><span>not sore</span></div></div>
+        <div class="rating"><label class="field">Stress</label><div class="choices" id="m-stress"></div><div class="scale-ends"><span>very stressed</span><span>relaxed</span></div></div>
+        <div class="rating"><label class="field">Mood</label><div class="choices" id="m-mood"></div><div class="scale-ends"><span>low</span><span>great</span></div></div>
+        <div class="rating"><label class="field">Want to train today?</label><div class="choices" id="m-motivation"></div><div class="scale-ends"><span>not at all</span><span>fired up</span></div></div>
+      </div>
+
+      <div class="card">
+        <label class="field" for="m-notes">Notes <span class="hint">(optional)</span></label>
+        <textarea id="m-notes" placeholder="Anything unusual? Travel, illness, big salty dinner..."></textarea>
+      </div>
+
+      <button class="primary" type="submit">Save check-in</button>
+      <div id="morning-message" class="message"></div>
+    </form>
+
+
+    <!-- ================= TAB: FOOD ================= -->
+    <div data-panel="food" hidden>
+
+      <div class="card">
+        <label class="field" for="f-date">Date</label>
+        <input type="date" id="f-date">
+        <div class="gap"></div>
+        <div class="totals">
+          <div><strong id="f-total-kcal">0</strong><span>kcal</span></div>
+          <div><strong id="f-total-protein">0</strong><span>g protein</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <label class="field">Meal</label>
+        <div class="choices" id="f-meal"></div>
+      </div>
+
+      <!-- WAY 1: one-tap favorites -->
+      <div class="card">
+        <div class="topbar">
+          <h2>Favorites</h2>
+          <button class="link" id="f-manage">Edit</button>
+        </div>
+        <p class="hint">Tap to log it under the meal picked above.</p>
+        <div class="fav-list" id="f-favorites"><span class="hint">Loading...</span></div>
+      </div>
+
+      <!-- WAY 2 + 3: describe it (AI) or type numbers yourself -->
+      <form class="card" id="food-form">
+        <h2>Add food</h2>
+        <label class="field" for="f-description">What did you eat?</label>
+        <textarea id="f-description" placeholder="e.g. 2 eggs, 1 slice sourdough, half an avocado"></textarea>
+        <div class="gap"></div>
+
+        <div class="row">
+          <label class="secondary" for="f-photo"
+                 style="text-align:center;padding:12px;border:1px solid var(--line);border-radius:12px;cursor:pointer;background:var(--card)">
+            Add photo
+          </label>
+          <button type="button" class="secondary" id="f-estimate">Estimate with AI</button>
+        </div>
+        <!-- Opens the camera on phones -->
+        <input type="file" id="f-photo" accept="image/*" capture="environment" hidden>
+        <div class="ai-note" id="f-photo-name"></div>
+        <div class="ai-note" id="f-ai-note"></div>
+        <div class="gap"></div>
+
+        <p class="hint">Or type the numbers yourself, e.g. from a label.</p>
+        <div class="row">
+          <div>
+            <label class="field" for="f-calories">Calories</label>
+            <input type="number" id="f-calories" inputmode="numeric" placeholder="kcal">
+          </div>
+          <div>
+            <label class="field" for="f-protein">Protein (g)</label>
+            <input type="number" id="f-protein" step="0.1" inputmode="decimal" placeholder="g">
+          </div>
+        </div>
+        <div class="gap"></div>
+
+        <label style="display:flex;gap:8px;align-items:center;font-size:15px">
+          <input type="checkbox" id="f-save-fav"> Also save as a favorite
+        </label>
+        <div class="gap"></div>
+
+        <button class="primary" type="submit">Log food</button>
+        <div id="food-message" class="message"></div>
+      </form>
+
+      <div class="card">
+        <h2>Logged today</h2>
+        <div id="f-entries"><span class="hint">Nothing logged yet.</span></div>
+      </div>
+    </div>
+
+
+    <!-- ================= TAB: TRAIN ================= -->
+    <form id="session-form" data-panel="train" hidden>
+      <p class="hint">Log this about 30 minutes after training. Trained twice? Log each session separately.</p>
+
+      <div class="card">
+        <div class="row">
+          <div>
+            <label class="field" for="s-date">Date</label>
+            <input type="date" id="s-date" required>
+          </div>
+          <div>
+            <label class="field">When</label>
+            <div class="choices" id="s-time"></div>
+          </div>
+        </div>
+        <div class="gap"></div>
+        <label class="field">Type of session</label>
+        <div class="choices" id="s-category"></div>
+      </div>
+
+      <!-- Shown for COMBAT sessions only -->
+      <div class="card" id="group-combat" hidden>
+        <label class="field">Sport</label>
+        <div class="choices" id="s-sport"></div>
+        <div class="gap"></div>
+        <label class="field">What was in it? <span class="hint">Pick all that apply</span></label>
+        <div class="choices" id="s-components"></div>
+        <div id="group-sparring" hidden>
+          <div class="gap"></div>
+          <label class="field">How hard was the sparring?</label>
+          <div class="choices" id="s-sparring"></div>
+        </div>
+      </div>
+
+      <!-- Shown for RUN sessions only -->
+      <div class="card" id="group-run" hidden>
+        <label class="field">Run type</label>
+        <div class="choices" id="s-run-type"></div>
+        <div class="gap"></div>
+        <label class="field" for="s-distance">Distance</label>
+        <div class="row">
+          <input type="number" id="s-distance" step="0.01" inputmode="decimal" placeholder="e.g. 5">
+          <select class="unit" id="s-distance-unit">
+            <option value="km">km</option>
+            <option value="mi">mi</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Shown for STRENGTH sessions only -->
+      <div class="card" id="group-strength" hidden>
+        <label class="field">Focus</label>
+        <div class="choices" id="s-strength"></div>
+      </div>
+
+      <div class="card">
+        <label class="field" for="s-minutes">Minutes</label>
+        <input type="number" id="s-minutes" inputmode="numeric" placeholder="e.g. 120" required>
+        <div class="gap"></div>
+        <label class="field">How hard was it overall?</label>
+        <p class="hint">0 = rest, 5 = hard, 10 = the hardest you can go.</p>
+        <div class="choices" id="s-rpe"></div>
+      </div>
+
+      <div class="card">
+        <label class="field">How did it go?</label>
+        <p class="hint">Compared to what you expected going in.</p>
+        <div class="choices" id="s-performance"></div>
+        <div class="gap"></div>
+        <label class="field" for="s-notes">Notes <span class="hint">(optional)</span></label>
+        <textarea id="s-notes" placeholder="Felt flat in round 3, great timing on the jab..."></textarea>
+      </div>
+
+      <button class="primary" type="submit">Save session</button>
+      <div id="session-message" class="message"></div>
+      <div style="height:10px"></div>
+      <button class="secondary" type="button" id="s-another" hidden>Log another session</button>
+    </form>
+
+
+    <!-- ================= TAB: HISTORY ================= -->
+    <div data-panel="history" hidden>
+      <p class="hint">The last 14 days.</p>
+      <div id="history-days"><p class="hint">Loading...</p></div>
+    </div>
+
+
+    <!-- ================= TAB: CAMP SETUP ================= -->
+    <div data-panel="camp" hidden>
+
+      <div class="card" id="camp-summary" hidden></div>
+
+      <form class="card" id="camp-form">
+        <div class="topbar">
+          <h2 id="camp-form-title">Set up your camp</h2>
+          <button type="button" class="link" id="camp-new" hidden>Start a new camp</button>
+        </div>
+        <p class="hint">One camp = one fight preparation.</p>
+
+        <label class="field" for="c-name">Camp name <span class="hint">(optional)</span></label>
+        <input type="text" id="c-name" placeholder="e.g. Spring fight 2027">
+        <div class="gap"></div>
+
+        <label class="field">Sport</label>
+        <div class="choices" id="c-sport"></div>
+        <div class="gap"></div>
+
+        <label class="field" for="c-start-date">Camp start date</label>
+        <input type="date" id="c-start-date" required>
+        <div class="gap"></div>
+
+        <label class="field">Weights</label>
+        <div class="row">
+          <div>
+            <span class="hint">Starting</span>
+            <input type="number" id="c-start-weight" step="0.1" inputmode="decimal" required>
+          </div>
+          <div>
+            <span class="hint">Goal (weight class)</span>
+            <input type="number" id="c-goal-weight" step="0.1" inputmode="decimal" required>
+          </div>
+          <div style="flex:0 0 90px">
+            <span class="hint">Unit</span>
+            <select class="weight-unit" id="c-unit">
+              <option value="kg">kg</option>
+              <option value="lb">lb</option>
+            </select>
+          </div>
+        </div>
+        <div class="gap"></div>
+
+        <label class="field" for="c-weigh-in">Weigh-in date</label>
+        <input type="date" id="c-weigh-in" required>
+        <div class="gap"></div>
+        <label class="field">Weigh-in type</label>
+        <div class="choices" id="c-weigh-type"></div>
+        <div class="gap"></div>
+
+        <label class="field" for="c-fight">Fight date <span class="hint">(optional)</span></label>
+        <input type="date" id="c-fight">
+        <div class="gap"></div>
+
+        <button class="primary" type="submit">Save camp</button>
+        <div id="camp-message" class="message"></div>
+      </form>
+    </div>
+
+  </section>
+</main>
+
+
+<!-- Supabase helper library: talks to the database for us -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<script>
+// =====================================================================
+// STEP 1: CONNECT TO THE DATABASE
+// The anon key is public by design. The security rules in the database
+// decide what each person can see.
+// =====================================================================
+const SUPABASE_URL      = "https://wptlcuzhskngjhvmbqzx.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwdGxjdXpoc2tuZ2podm1icXp4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3Nzc4MTUsImV4cCI6MjEwODM1MzgxNX0.DjLRqoh0SDT3aGhowLlq9auKAGlAOMh0McjLvuMxBwc";
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let currentUser = null;   // who is signed in
+let currentCamp = null;   // the athlete's most recent camp, once loaded
+
+const KG_PER_LB = 0.45359237;
+const KM_PER_MI = 1.609344;
+
+
+// =====================================================================
+// STEP 2: SMALL HELPER FUNCTIONS (reusable recipes)
+// =====================================================================
+
+// Find an element by its id.
+function $(id) { return document.getElementById(id); }
+
+// A date as "YYYY-MM-DD" in the athlete's own time zone.
+function toDateString(d) {
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day   = String(d.getDate()).padStart(2, "0");
+  return d.getFullYear() + "-" + month + "-" + day;
+}
+function todayLocal() { return toDateString(new Date()); }
+
+// Turn "2026-10-23" into a date at local midnight (avoids time-zone slips).
+function parseDate(text) {
+  const parts = text.split("-").map(Number);
+  return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+// Whole days from date A to date B.
+function daysBetween(a, b) {
+  return Math.round((parseDate(b) - parseDate(a)) / 86400000);
+}
+
+// "Fri 23 Oct"
+function prettyDate(text) {
+  return parseDate(text).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+}
+
+// Show a short green (ok) or red (error) message.
+function showMessage(id, text, type) {
+  const box = $(id);
+  box.textContent = text;
+  box.className = "message " + type;
+}
+
+// Make user-typed text safe to show on the page.
+function escapeHtml(text) {
+  return String(text ?? "").replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+// Turn "3" into 3, or null if empty.
+function toNumber(value) {
+  return value === null || value === undefined || value === "" ? null : Number(value);
+}
+
+// Build a row of tap buttons inside a box (clears the box first).
+//   options:  list of [value, label] pairs
+//   multiple: true = pick several, false = pick one
+function makeChoices(boxId, options, multiple) {
+  const box = $(boxId);
+  const inputType = multiple ? "checkbox" : "radio";
+  box.innerHTML = "";
+  options.forEach(function (option, i) {
+    const inputId = boxId + "-" + i;
+    box.insertAdjacentHTML("beforeend",
+      '<input type="' + inputType + '" name="' + boxId + '" id="' + inputId + '" value="' + option[0] + '">' +
+      '<label for="' + inputId + '">' + option[1] + '</label>');
+  });
+}
+
+// Read the picked button in a pick-one row (null if none).
+function getChoice(boxId) {
+  const picked = document.querySelector('input[name="' + boxId + '"]:checked');
+  return picked ? picked.value : null;
+}
+
+// Read all picked buttons in a pick-several row (a list).
+function getChoices(boxId) {
+  return Array.from(document.querySelectorAll('input[name="' + boxId + '"]:checked'))
+              .map(function (input) { return input.value; });
+}
+
+// Pick a button in code, e.g. to fill a form with saved values.
+function setChoice(boxId, value) {
+  document.querySelectorAll('input[name="' + boxId + '"]').forEach(function (input) {
+    input.checked = input.value === value;
+  });
+}
+
+// Remember small settings on this phone (kg/lb, km/mi).
+function getSetting(key, fallback) {
+  try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
+}
+function saveSetting(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) { /* storage blocked: fine */ }
+}
+
+// Weight in the athlete's chosen unit, with the other unit in brackets.
+function formatWeight(kg) {
+  if (kg === null || kg === undefined) return "–";
+  const lb = kg / KG_PER_LB;
+  return getSetting("weightUnit", "kg") === "lb"
+    ? lb.toFixed(1) + " lb (" + Number(kg).toFixed(1) + " kg)"
+    : Number(kg).toFixed(1) + " kg (" + lb.toFixed(1) + " lb)";
+}
+
+// Convert whatever the athlete typed into kg for saving.
+function inputToKg(value, unit) {
+  const n = toNumber(value);
+  if (n === null) return null;
+  return unit === "lb" ? Math.round(n * KG_PER_LB * 100) / 100 : n;
+}
+
+// Show a kg value in the chosen unit inside an input box.
+function kgToInput(kg, unit) {
+  if (kg === null || kg === undefined) return "";
+  return unit === "lb" ? (kg / KG_PER_LB).toFixed(1) : Number(kg).toFixed(1);
+}
+
+
+// =====================================================================
+// STEP 3: SPORTS AND SESSION PARTS
+// GOAL: one shared list of session parts underneath, different names
+// on top for each sport. That keeps sports comparable in the analysis
+// while each athlete sees words from her own gym.
+// =====================================================================
+const SPORTS = [
+  ["muay_thai", "Muay Thai"], ["boxing", "Boxing"], ["mma", "MMA"], ["bjj", "BJJ"]
+];
+
+// Which parts each sport shows, with the name that sport uses.
+const SPORT_COMPONENTS = {
+  muay_thai: [["warmup","Skipping / warm-up"], ["shadow","Shadow"], ["bag","Bag"], ["pads","Pads"],
+              ["technique","Technique"], ["clinch","Clinch"], ["sparring","Sparring"], ["conditioning","Conditioning"]],
+  boxing:    [["warmup","Skipping / warm-up"], ["shadow","Shadow"], ["bag","Bag"], ["pads","Mitts"],
+              ["technique","Technique"], ["sparring","Sparring"], ["conditioning","Conditioning"]],
+  mma:       [["warmup","Warm-up"], ["shadow","Shadow"], ["bag","Bag"], ["pads","Pads / mitts"],
+              ["technique","Technique"], ["clinch","Clinch"], ["wrestling","Wrestling"],
+              ["grappling","Grappling"], ["sparring","Sparring"], ["conditioning","Conditioning"]],
+  bjj:       [["warmup","Warm-up"], ["technique","Drilling"], ["positional","Positional"],
+              ["sparring","Rolling"], ["conditioning","Conditioning"]]
+};
+
+const CATEGORIES = [["combat","Combat"], ["run","Run"], ["strength","Strength"], ["other","Other"]];
+const RUN_TYPES  = [["easy","Easy"], ["tempo","Tempo"], ["intervals","Intervals / sprints"], ["long","Long"]];
+const STRENGTH   = [["lower","Lower body"], ["upper","Upper body"], ["full","Full body"]];
+const MEALS      = [["breakfast","Breakfast"], ["lunch","Lunch"], ["dinner","Dinner"], ["snack","Snack"]];
+
+// Find the display name for a value, e.g. "pads" in boxing -> "Mitts".
+function labelFor(list, value) {
+  const found = list.find(function (item) { return item[0] === value; });
+  return found ? found[1] : value;
+}
+
+
+// =====================================================================
+// STEP 4: BUILD ALL THE TAP-BUTTON ROWS
+// =====================================================================
+const oneToFive = [["1","1"], ["2","2"], ["3","3"], ["4","4"], ["5","5"]];
+const zeroToTen = [];
+for (let n = 0; n <= 10; n++) { zeroToTen.push([String(n), String(n)]); }
+
+// Morning
+makeChoices("m-flow", [["none","None"], ["spotting","Spotting"], ["light","Light"], ["medium","Medium"], ["heavy","Heavy"]], false);
+makeChoices("m-symptoms", [["bloating","Bloating"], ["cramps","Cramps"], ["breast_tenderness","Breast tenderness"],
+                           ["headache","Headache"], ["cravings","Cravings"], ["low_mood","Low mood"]], true);
+["sleep_quality", "energy", "soreness", "stress", "mood", "motivation"].forEach(function (name) {
+  makeChoices("m-" + name, oneToFive, false);
+});
+
+// Food
+makeChoices("f-meal", MEALS, false);
+
+// Train
+makeChoices("s-time", [["am","AM"], ["pm","PM"]], false);
+makeChoices("s-category", CATEGORIES, false);
+makeChoices("s-sport", SPORTS, false);
+makeChoices("s-sparring", [["light","Light"], ["hard","Hard"]], false);
+makeChoices("s-run-type", RUN_TYPES, false);
+makeChoices("s-strength", STRENGTH, false);
+makeChoices("s-rpe", zeroToTen, false);
+makeChoices("s-performance", [["worse","Worse"], ["expected","As expected"], ["better","Better"]], false);
+
+// Camp
+makeChoices("c-sport", SPORTS, false);
+makeChoices("c-weigh-type", [["day_before","Day before"], ["same_day","Same day"]], false);
+
+
+// =====================================================================
+// STEP 5: UNITS (kg/lb, km/mi), remembered on this phone
+// All weight-unit dropdowns stay in sync: change one, they all change.
+// =====================================================================
+document.querySelectorAll(".weight-unit").forEach(function (select) {
+  select.value = getSetting("weightUnit", "kg");
+  select.addEventListener("change", function () {
+    // Camp boxes: convert what's typed so the numbers stay correct
+    const oldUnit = getSetting("weightUnit", "kg");
+    ["c-start-weight", "c-goal-weight"].forEach(function (id) {
+      const kg = inputToKg($(id).value, oldUnit);
+      $(id).value = kgToInput(kg, select.value);
+    });
+    saveSetting("weightUnit", select.value);
+    document.querySelectorAll(".weight-unit").forEach(function (other) { other.value = select.value; });
+    if (currentCamp) { renderCampSummary(); }
+  });
+});
+
+$("s-distance-unit").value = getSetting("distanceUnit", "km");
+$("s-distance-unit").addEventListener("change", function () {
+  saveSetting("distanceUnit", $("s-distance-unit").value);
+});
+
+
+// =====================================================================
+// STEP 6: TABS
+// =====================================================================
+function switchTab(name) {
+  document.querySelectorAll("nav.tabs button").forEach(function (b) {
+    b.classList.toggle("active", b.dataset.tab === name);
+  });
+  document.querySelectorAll("[data-panel]").forEach(function (panel) {
+    panel.hidden = panel.dataset.panel !== name;
+  });
+  // Refresh data when opening these tabs
+  if (name === "food")    { loadFood(); }
+  if (name === "history") { loadHistory(); }
+  if (name === "camp")    { renderCampSummary(); }
+}
+
+document.querySelectorAll("nav.tabs button").forEach(function (tabButton) {
+  tabButton.addEventListener("click", function () { switchTab(tabButton.dataset.tab); });
+});
+
+
+// =====================================================================
+// STEP 7: SIGN IN / SIGN OUT
+// =====================================================================
+$("login-form").addEventListener("submit", async function (event) {
+  event.preventDefault();
+  showMessage("login-message", "Sending...", "ok");
+  const result = await db.auth.signInWithOtp({
+    email: $("login-email").value.trim(),
+    options: { emailRedirectTo: window.location.origin + window.location.pathname }
+  });
+  if (result.error) {
+    showMessage("login-message", "Couldn't send the link: " + result.error.message, "error");
+  } else {
+    showMessage("login-message", "Check your email and tap the link.", "ok");
+  }
+});
+
+$("logout-btn").addEventListener("click", async function () { await db.auth.signOut(); });
+
+// Runs whenever sign-in status changes, including when the page opens.
+db.auth.onAuthStateChange(function (event, session) {
+  const wasSignedIn = !!currentUser;
+  currentUser = session ? session.user : null;
+  $("login-view").hidden = !!currentUser;
+  $("app-view").hidden   = !currentUser;
+
+  // First time we see this user on this page load: get their camp.
+  // (setTimeout lets Supabase finish signing in before we ask for data.)
+  if (currentUser && !wasSignedIn) { setTimeout(startApp, 0); }
+});
+
+async function startApp() {
+  resetDates();
+  await loadCamp();
+  if (!currentCamp) {
+    // New athlete: start with the setup stage.
+    switchTab("camp");
+    showMessage("camp-message", "Welcome! Set up your camp first.", "ok");
+  }
+}
+
+// Set date boxes to today and pick sensible defaults from the clock.
+function resetDates() {
+  const today = todayLocal();
+  ["m-date", "f-date", "s-date"].forEach(function (id) { $(id).value = today; });
+  const hour = new Date().getHours();
+  setChoice("s-time", hour < 12 ? "am" : "pm");
+  setChoice("f-meal", hour < 11 ? "breakfast" : hour < 16 ? "lunch" : hour < 21 ? "dinner" : "snack");
+}
+
+
+// =====================================================================
+// STEP 8: CAMP SETUP
+// GOAL: save the fight plan, then show how realistic it is.
+// =====================================================================
+async function loadCamp() {
+  const result = await db.from("camps").select("*")
+    .order("created_at", { ascending: false }).limit(1);
+  currentCamp = result.data && result.data.length ? result.data[0] : null;
+  fillCampForm();
+  // Default the combat sport in the Train tab to the camp's sport
+  pickSport(currentCamp ? currentCamp.sport : "muay_thai");
+}
+
+// Put the saved camp into the form (or clear it for a new camp).
+function fillCampForm() {
+  const c = currentCamp;
+  const unit = getSetting("weightUnit", "kg");
+  $("c-name").value         = c ? (c.name || "") : "";
+  setChoice("c-sport",        c ? c.sport : null);
+  $("c-start-date").value   = c ? c.start_date : todayLocal();
+  $("c-start-weight").value = c ? kgToInput(c.start_weight_kg, unit) : "";
+  $("c-goal-weight").value  = c ? kgToInput(c.goal_weight_kg, unit) : "";
+  $("c-weigh-in").value     = c ? (c.weigh_in_date || "") : "";
+  setChoice("c-weigh-type",   c ? c.weigh_in_type : null);
+  $("c-fight").value        = c ? (c.fight_date || "") : "";
+  $("camp-form-title").textContent = c ? "Edit your camp" : "Set up your camp";
+  $("camp-new").hidden = !c;
+}
+
+$("camp-new").addEventListener("click", function () {
+  currentCamp = null;
+  fillCampForm();
+  $("camp-summary").hidden = true;
+});
+
+$("camp-form").addEventListener("submit", async function (event) {
+  event.preventDefault();
+  const unit = $("c-unit").value;
+  const row = {
+    user_id:         currentUser.id,
+    name:            $("c-name").value.trim() || null,
+    sport:           getChoice("c-sport"),
+    start_date:      $("c-start-date").value,
+    start_weight_kg: inputToKg($("c-start-weight").value, unit),
+    goal_weight_kg:  inputToKg($("c-goal-weight").value, unit),
+    weigh_in_date:   $("c-weigh-in").value || null,
+    weigh_in_type:   getChoice("c-weigh-type"),
+    fight_date:      $("c-fight").value || null
+  };
+
+  if (!row.sport)         { showMessage("camp-message", "Pick your sport.", "error"); return; }
+  if (!row.weigh_in_type) { showMessage("camp-message", "Pick the weigh-in type.", "error"); return; }
+
+  showMessage("camp-message", "Saving...", "ok");
+
+  // Edit the current camp, or create a new one
+  const result = currentCamp
+    ? await db.from("camps").update(row).eq("id", currentCamp.id).select().single()
+    : await db.from("camps").insert(row).select().single();
+
+  if (result.error) {
+    showMessage("camp-message", "Not saved: " + result.error.message, "error");
+    return;
+  }
+  currentCamp = result.data;
+  fillCampForm();
+  pickSport(currentCamp.sport);
+  showMessage("camp-message", "Camp saved.", "ok");
+  renderCampSummary();
+});
+
+// The reality check: days left, weight to lose, and how fast that is.
+async function renderCampSummary() {
+  const box = $("camp-summary");
+  if (!currentCamp || !currentCamp.weigh_in_date) { box.hidden = true; return; }
+
+  // Current weight = most recent morning weight, or the starting weight
+  const latest = await db.from("daily_checkins").select("date, weight_kg")
+    .not("weight_kg", "is", null).order("date", { ascending: false }).limit(1);
+  const current = latest.data && latest.data.length
+    ? Number(latest.data[0].weight_kg) : Number(currentCamp.start_weight_kg);
+
+  const daysLeft = daysBetween(todayLocal(), currentCamp.weigh_in_date);
+  const toGo     = current - Number(currentCamp.goal_weight_kg);
+  const perWeek  = daysLeft > 0 ? toGo / (daysLeft / 7) : null;
+  const pctWeek  = perWeek !== null ? perWeek / current * 100 : null;
+
+  // Rough guide: about 1% of bodyweight per week is sustainable.
+  // Faster than that tends to cost muscle and power.
+  let verdict = "";
+  if (toGo <= 0)             verdict = '<div class="verdict ok">You are at or under the class limit.</div>';
+  else if (pctWeek === null) verdict = '<div class="verdict bad">Weigh-in date has passed.</div>';
+  else if (pctWeek <= 1.0)   verdict = '<div class="verdict ok">Sustainable pace (' + pctWeek.toFixed(1) + '% of bodyweight per week).</div>';
+  else if (pctWeek <= 1.5)   verdict = '<div class="verdict warn">Aggressive (' + pctWeek.toFixed(1) + '% per week). Expect it to cost some power.</div>';
+  else                       verdict = '<div class="verdict bad">Very aggressive (' + pctWeek.toFixed(1) + '% per week). Talk to your coach about the plan.</div>';
+
+  const perWeekText = perWeek !== null && toGo > 0 ? formatWeight(perWeek).replace(/ \(.*\)/, "") : "–";
+
+  box.innerHTML =
+    '<h2>' + escapeHtml(currentCamp.name || labelFor(SPORTS, currentCamp.sport) + " camp") + '</h2>' +
+    '<div class="stat-grid">' +
+      '<div><strong>' + Math.max(daysLeft, 0) + '</strong><span>days to weigh-in</span></div>' +
+      '<div><strong>' + formatWeight(current).replace(/ \(.*\)/, "") + '</strong><span>current weight</span></div>' +
+      '<div><strong>' + (toGo > 0 ? formatWeight(toGo).replace(/ \(.*\)/, "") : "0") + '</strong><span>to go</span></div>' +
+      '<div><strong>' + perWeekText + '</strong><span>needed per week</span></div>' +
+    '</div>' + verdict +
+    '<p class="hint">Based on diet and training only, before any fight-week water cut.</p>';
+  box.hidden = false;
+}
+
+
+// =====================================================================
+// STEP 9: MORNING CHECK-IN
+// "upsert" = add a new row, or update the row if that day already exists.
+// =====================================================================
+$("morning-form").addEventListener("submit", async function (event) {
+  event.preventDefault();
+  const row = {
+    user_id:       currentUser.id,
+    date:          $("m-date").value,
+    weight_kg:     inputToKg($("m-weight").value, $("m-unit").value),
+    period_flow:   getChoice("m-flow"),
+    symptoms:      getChoices("m-symptoms"),
+    sleep_quality: toNumber(getChoice("m-sleep_quality")),
+    energy:        toNumber(getChoice("m-energy")),
+    soreness:      toNumber(getChoice("m-soreness")),
+    stress:        toNumber(getChoice("m-stress")),
+    mood:          toNumber(getChoice("m-mood")),
+    motivation:    toNumber(getChoice("m-motivation")),
+    notes:         $("m-notes").value.trim() || null
+  };
+  showMessage("morning-message", "Saving...", "ok");
+  const result = await db.from("daily_checkins").upsert(row, { onConflict: "user_id,date" });
+  if (result.error) {
+    showMessage("morning-message", "Not saved: " + result.error.message, "error");
+  } else {
+    showMessage("morning-message", "Saved. Have a good day.", "ok");
+  }
+});
+
+
+// =====================================================================
+// STEP 10: FOOD
+// Three ways in: tap a favorite, describe it for an AI estimate, or
+// type the numbers. Every way ends up as one row in food_entries.
+// =====================================================================
+let favorites = [];        // the athlete's saved meals
+let managingFavs = false;  // true while "Edit" mode is on
+let aiUsed = false;        // did the AI fill in the current numbers?
+
+$("f-date").addEventListener("change", loadFood);
+
+// Load the day's entries and the favorites list.
+async function loadFood() {
+  const date = $("f-date").value || todayLocal();
+
+  const entries = await db.from("food_entries").select("*")
+    .eq("date", date).order("created_at", { ascending: true });
+
+  if (entries.error) {
+    $("f-entries").innerHTML = '<span class="hint">Could not load.</span>';
+  } else {
+    let kcal = 0, protein = 0;
+    entries.data.forEach(function (e) { kcal += e.calories || 0; protein += Number(e.protein_g) || 0; });
+    $("f-total-kcal").textContent = Math.round(kcal);
+    $("f-total-protein").textContent = Math.round(protein);
+
+    $("f-entries").innerHTML = entries.data.length === 0
+      ? '<span class="hint">Nothing logged yet.</span>'
+      : entries.data.map(function (e) {
+          return '<div class="entry"><div>' + escapeHtml(e.description || "Food") +
+                 '<br><span>' + labelFor(MEALS, e.meal) + ' · ' + (e.calories ?? "–") + ' kcal · ' +
+                 (e.protein_g ?? "–") + ' g</span></div>' +
+                 '<button class="small" data-delete-entry="' + e.id + '">Remove</button></div>';
+        }).join("");
+  }
+  await loadFavorites();
+}
+
+async function loadFavorites() {
+  const result = await db.from("food_favorites").select("*").order("name");
+  favorites = result.data || [];
+  renderFavorites();
+}
+
+function renderFavorites() {
+  if (favorites.length === 0) {
+    $("f-favorites").innerHTML = '<span class="hint">None yet. Log a food and tick "Also save as a favorite".</span>';
+    return;
+  }
+  $("f-favorites").innerHTML = favorites.map(function (f) {
+    return '<button type="button" class="fav" data-fav="' + f.id + '">' +
+           (managingFavs ? '<span class="remove">×</span>' : '') +
+           escapeHtml(f.name) + ' <small>' + (f.calories ?? "–") + ' kcal · ' + (f.protein_g ?? "–") + ' g</small></button>';
+  }).join("");
+}
+
+// "Edit" turns tapping into deleting, so nobody deletes by accident.
+$("f-manage").addEventListener("click", function () {
+  managingFavs = !managingFavs;
+  $("f-manage").textContent = managingFavs ? "Done" : "Edit";
+  renderFavorites();
+});
+
+// WAY 1: tap a favorite to log it (or delete it in Edit mode).
+$("f-favorites").addEventListener("click", async function (event) {
+  const button = event.target.closest("[data-fav]");
+  if (!button) return;
+  const fav = favorites.find(function (f) { return String(f.id) === button.dataset.fav; });
+  if (!fav) return;
+
+  if (managingFavs) {
+    await db.from("food_favorites").delete().eq("id", fav.id);
+    await loadFavorites();
+    return;
+  }
+
+  const result = await db.from("food_entries").insert({
+    user_id: currentUser.id, date: $("f-date").value, meal: getChoice("f-meal"),
+    description: fav.name, calories: fav.calories, protein_g: fav.protein_g, source: "favorite"
+  });
+  if (result.error) {
+    showMessage("food-message", "Not saved: " + result.error.message, "error");
+  } else {
+    showMessage("food-message", "Logged " + fav.name + ".", "ok");
+    loadFood();
+  }
+});
+
+// Show the photo's name once picked, so the athlete knows it's attached.
+$("f-photo").addEventListener("change", function () {
+  const file = $("f-photo").files[0];
+  $("f-photo-name").textContent = file ? "Photo attached." : "";
+});
+
+// Shrink a phone photo to max 1024px so it uploads fast and cheap.
+function photoToBase64(file) {
+  return new Promise(function (resolve, reject) {
+    const img = new Image();
+    img.onload = function () {
+      const scale = Math.min(1, 1024 / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(img.src);
+      resolve(canvas.toDataURL("image/jpeg", 0.8).split(",")[1]);
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+// WAY 2: ask the AI to estimate. It fills in the numbers; you check them.
+$("f-estimate").addEventListener("click", async function () {
+  const description = $("f-description").value.trim();
+  const file = $("f-photo").files[0];
+  if (!description && !file) {
+    showMessage("food-message", "Describe the food or add a photo first.", "error");
+    return;
+  }
+  $("f-ai-note").textContent = "Estimating...";
+  try {
+    const image = file ? await photoToBase64(file) : null;
+    const result = await db.functions.invoke("estimate-food", { body: { description: description, image: image } });
+    if (result.error || !result.data || result.data.error) {
+      throw new Error(result.data && result.data.error ? result.data.error : "not available");
+    }
+    $("f-calories").value = result.data.calories;
+    $("f-protein").value = result.data.protein_g;
+    $("f-ai-note").textContent = "AI estimate: " + result.data.summary + ". Adjust if it looks off.";
+    aiUsed = true;
+  } catch (error) {
+    $("f-ai-note").textContent = "AI estimate isn't available right now. Type the numbers instead.";
+  }
+});
+
+// If the athlete types her own numbers, it's a manual entry.
+["f-calories", "f-protein"].forEach(function (id) {
+  $(id).addEventListener("input", function () { aiUsed = false; });
+});
+
+// WAY 2 + 3: save the food (and maybe a new favorite).
+$("food-form").addEventListener("submit", async function (event) {
+  event.preventDefault();
+  const description = $("f-description").value.trim();
+  const calories = toNumber($("f-calories").value);
+  const protein  = toNumber($("f-protein").value);
+
+  if (calories === null && protein === null) {
+    showMessage("food-message", "Add calories or protein, or tap Estimate with AI.", "error");
+    return;
+  }
+
+  const result = await db.from("food_entries").insert({
+    user_id: currentUser.id, date: $("f-date").value, meal: getChoice("f-meal"),
+    description: description || null,
+    calories: calories !== null ? Math.round(calories) : null,
+    protein_g: protein, source: aiUsed ? "ai" : "manual"
+  });
+  if (result.error) {
+    showMessage("food-message", "Not saved: " + result.error.message, "error");
+    return;
+  }
+
+  if ($("f-save-fav").checked) {
+    await db.from("food_favorites").insert({
+      user_id: currentUser.id, name: description || "Saved meal",
+      calories: calories !== null ? Math.round(calories) : null, protein_g: protein
+    });
+  }
+
+  // Clear the form for the next food
+  ["f-description", "f-calories", "f-protein"].forEach(function (id) { $(id).value = ""; });
+  $("f-photo").value = "";
+  $("f-photo-name").textContent = "";
+  $("f-ai-note").textContent = "";
+  $("f-save-fav").checked = false;
+  aiUsed = false;
+  showMessage("food-message", "Logged.", "ok");
+  loadFood();
+});
+
+// Remove a logged food.
+$("f-entries").addEventListener("click", async function (event) {
+  const button = event.target.closest("[data-delete-entry]");
+  if (!button) return;
+  await db.from("food_entries").delete().eq("id", button.dataset.deleteEntry);
+  loadFood();
+});
+
+
+// =====================================================================
+// STEP 11: TRAINING SESSIONS
+// GOAL: log the session as a whole (minutes x how hard = training load)
+// and tag what was in it, instead of logging every drill.
+// =====================================================================
+
+// Show only the boxes that fit the chosen session type.
+$("s-category").addEventListener("change", function () {
+  const category = getChoice("s-category");
+  $("group-combat").hidden   = category !== "combat";
+  $("group-run").hidden      = category !== "run";
+  $("group-strength").hidden = category !== "strength";
+});
+
+// Pick a sport and show that sport's session parts.
+function pickSport(sport) {
+  setChoice("s-sport", sport);
+  makeChoices("s-components", SPORT_COMPONENTS[sport] || SPORT_COMPONENTS.muay_thai, true);
+  $("group-sparring").hidden = true;
+}
+$("s-sport").addEventListener("change", function () { pickSport(getChoice("s-sport")); });
+
+// Ask how hard the sparring was only when sparring is ticked.
+$("s-components").addEventListener("change", function () {
+  $("group-sparring").hidden = !getChoices("s-components").includes("sparring");
+});
+
+$("session-form").addEventListener("submit", async function (event) {
+  event.preventDefault();
+  const category = getChoice("s-category");
+  const rpe = toNumber(getChoice("s-rpe"));
+
+  if (!category)    { showMessage("session-message", "Pick the type of session.", "error"); return; }
+  if (rpe === null) { showMessage("session-message", "Pick how hard it was (0-10).", "error"); return; }
+
+  // Distance always saved in km
+  let distanceKm = toNumber($("s-distance").value);
+  if (distanceKm !== null && $("s-distance-unit").value === "mi") {
+    distanceKm = Math.round(distanceKm * KM_PER_MI * 100) / 100;
+  }
+
+  const components = category === "combat" ? getChoices("s-components") : [];
+  const row = {
+    user_id:            currentUser.id,
+    date:               $("s-date").value,
+    time_of_day:        getChoice("s-time"),
+    category:           category,
+    sport:              category === "combat" ? getChoice("s-sport") : null,
+    components:         components,
+    sparring_intensity: components.includes("sparring") ? getChoice("s-sparring") : null,
+    run_type:           category === "run" ? getChoice("s-run-type") : null,
+    distance_km:        category === "run" ? distanceKm : null,
+    strength_focus:     category === "strength" ? getChoice("s-strength") : null,
+    minutes:            toNumber($("s-minutes").value),
+    rpe:                rpe,
+    performance:        getChoice("s-performance"),
+    notes:              $("s-notes").value.trim() || null
+  };
+
+  showMessage("session-message", "Saving...", "ok");
+  const result = await db.from("training_sessions").insert(row);
+  if (result.error) {
+    showMessage("session-message", "Not saved: " + result.error.message, "error");
+  } else {
+    showMessage("session-message", "Saved. Good work.", "ok");
+    $("s-another").hidden = false;
+  }
+});
+
+// Clear the form for a second session, keeping the date.
+$("s-another").addEventListener("click", function () {
+  const date = $("s-date").value;
+  $("session-form").reset();
+  $("s-date").value = date;
+  setChoice("s-time", "pm");
+  $("s-distance-unit").value = getSetting("distanceUnit", "km");
+  ["group-combat", "group-run", "group-strength", "group-sparring", "s-another"].forEach(function (id) { $(id).hidden = true; });
+  pickSport(currentCamp ? currentCamp.sport : "muay_thai");
+  showMessage("session-message", "", "ok");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
+
+// =====================================================================
+// STEP 12: HISTORY, GROUPED BY DAY
+// GOAL: one card per day with weight, food totals and sessions.
+// =====================================================================
+
+// One readable line for a session.
+function describeSession(s) {
+  const parts = [];
+  if (s.category === "combat") {
+    const names = (s.components || []).map(function (c) {
+      return labelFor(SPORT_COMPONENTS[s.sport] || [], c);
+    });
+    parts.push("<strong>" + labelFor(SPORTS, s.sport) + "</strong>" + (names.length ? ": " + names.join(", ") : ""));
+    if (s.sparring_intensity) parts.push(s.sparring_intensity + " sparring");
+  } else if (s.category === "run") {
+    let run = "<strong>Run</strong>" + (s.run_type ? " (" + labelFor(RUN_TYPES, s.run_type).toLowerCase() + ")" : "");
+    if (s.distance_km) {
+      const useMiles = getSetting("distanceUnit", "km") === "mi";
+      const dist = useMiles ? s.distance_km / KM_PER_MI : Number(s.distance_km);
+      run += " " + dist.toFixed(1) + (useMiles ? " mi" : " km");
+      if (s.minutes) {
+        // Pace = minutes per km (or mile), shown as m:ss
+        // Work in whole seconds so it never shows "5:60"
+        const paceSeconds = Math.round(s.minutes * 60 / dist);
+        run += " · " + Math.floor(paceSeconds / 60) + ":" + String(paceSeconds % 60).padStart(2, "0") + (useMiles ? "/mi" : "/km");
+      }
+    }
+    parts.push(run);
+  } else if (s.category === "strength") {
+    parts.push("<strong>Strength</strong>" + (s.strength_focus ? " (" + labelFor(STRENGTH, s.strength_focus).toLowerCase() + ")" : ""));
+  } else {
+    parts.push("<strong>" + (s.category === "other" ? "Other" : "Session") + "</strong>");
+  }
+  const load = s.rpe !== null && s.minutes ? s.rpe * s.minutes : null;
+  parts.push((s.minutes || "–") + " min · RPE " + s.rpe + (load ? " · load " + load : ""));
+  if (s.performance) parts.push(labelFor([["worse","went worse"], ["expected","as expected"], ["better","went better"]], s.performance));
+  return (s.time_of_day ? s.time_of_day.toUpperCase() + " · " : "") + parts.join(" · ");
+}
+
+async function loadHistory() {
+  const start = new Date();
+  start.setDate(start.getDate() - 13);
+  const from = toDateString(start);
+
+  // Get the three kinds of data for the last 14 days
+  const [checkins, food, sessions] = await Promise.all([
+    db.from("daily_checkins").select("date, weight_kg, period_flow, energy, sleep_quality").gte("date", from),
+    db.from("food_entries").select("date, calories, protein_g").gte("date", from),
+    db.from("training_sessions").select("*").gte("date", from).order("created_at")
+  ]);
+
+  if (checkins.error || food.error || sessions.error) {
+    $("history-days").innerHTML = '<p class="hint">Could not load.</p>';
+    return;
+  }
+
+  // Sort everything into one bucket per day
+  const days = {};
+  function day(date) {
+    if (!days[date]) days[date] = { checkin: null, kcal: 0, protein: 0, foodCount: 0, sessions: [] };
+    return days[date];
+  }
+  checkins.data.forEach(function (c) { day(c.date).checkin = c; });
+  food.data.forEach(function (f) {
+    const d = day(f.date);
+    d.kcal += f.calories || 0; d.protein += Number(f.protein_g) || 0; d.foodCount++;
+  });
+  sessions.data.forEach(function (s) { day(s.date).sessions.push(s); });
+
+  const dates = Object.keys(days).sort().reverse();
+  if (dates.length === 0) {
+    $("history-days").innerHTML = '<p class="hint">Nothing logged in the last 14 days.</p>';
+    return;
+  }
+
+  $("history-days").innerHTML = dates.map(function (date) {
+    const d = days[date];
+    let html = '<div class="card day"><h2>' + prettyDate(date) + '</h2>';
+
+    if (d.checkin) {
+      const c = d.checkin;
+      html += '<p>' + formatWeight(c.weight_kg) +
+              (c.period_flow && c.period_flow !== "none" ? ' · period: ' + c.period_flow : '') +
+              ' · energy ' + (c.energy || "–") + ' · sleep ' + (c.sleep_quality || "–") + '</p>';
+    }
+    if (d.foodCount) {
+      html += '<p>' + Math.round(d.kcal) + ' kcal · ' + Math.round(d.protein) + ' g protein</p>';
+    }
+    let dayLoad = 0;
+    d.sessions.forEach(function (s) {
+      html += '<p>' + describeSession(s) + '</p>';
+      if (s.rpe !== null && s.minutes) dayLoad += s.rpe * s.minutes;
+    });
+    if (d.sessions.length > 1) html += '<p class="muted">Day load: ' + dayLoad + '</p>';
+    return html + '</div>';
+  }).join("");
+}
+</script>
+</body>
+</html>
