@@ -254,6 +254,15 @@
       </div>
 
       <div class="card">
+        <h2>Sleep</h2>
+        <label class="field">Hours slept <span class="hint">(optional)</span></label>
+        <div class="row">
+          <input type="number" id="m-sleep-h" inputmode="numeric" min="0" max="24" placeholder="hours">
+          <input type="number" id="m-sleep-m" inputmode="numeric" min="0" max="59" placeholder="minutes">
+        </div>
+      </div>
+
+      <div class="card">
         <h2>How are you?</h2>
         <p class="hint">1 = bad, 5 = good, for every question.</p>
         <div class="rating"><label class="field">Sleep quality</label><div class="choices" id="m-sleep_quality"></div><div class="scale-ends"><span>terrible</span><span>great</span></div></div>
@@ -440,6 +449,14 @@
 
     <!-- ================= TAB: CAMP SETUP ================= -->
     <div data-panel="camp" hidden>
+
+      <!-- Shown when there's no camp: off-season is a normal state -->
+      <div class="card" id="offseason-note" hidden>
+        <h2>Off-season</h2>
+        <p class="hint" style="margin-bottom:0">No fight booked? Keep logging as normal. Off-season data shows
+        your cycle pattern without a diet in the way, which makes your next cut easier to plan.
+        Set up a camp below once you have a fight.</p>
+      </div>
 
       <div class="card" id="camp-summary" hidden></div>
 
@@ -631,6 +648,20 @@ function inputToKg(value, unit) {
   return unit === "lb" ? Math.round(n * KG_PER_LB * 100) / 100 : n;
 }
 
+// Hours + minutes -> decimal hours (7 h 30 min -> 7.5). Empty -> null.
+function sleepToHours(hours, minutes) {
+  const h = toNumber(hours), m = toNumber(minutes);
+  if (h === null && m === null) return null;
+  return Math.round(((h || 0) + (m || 0) / 60) * 100) / 100;
+}
+
+// Decimal hours -> "7h 30m" for display.
+function formatSleep(hours) {
+  if (hours === null || hours === undefined) return null;
+  const total = Math.round(Number(hours) * 60);
+  return Math.floor(total / 60) + "h " + String(total % 60).padStart(2, "0") + "m";
+}
+
 // Show a kg value in the chosen unit inside an input box.
 function kgToInput(kg, unit) {
   if (kg === null || kg === undefined) return "";
@@ -783,14 +814,11 @@ db.auth.onAuthStateChange(function (event, session) {
   if (currentUser && !wasSignedIn) { setTimeout(startApp, 0); }
 });
 
+// Off-season is normal: no camp needed to log. The Camp tab only matters
+// once there's a fight on the calendar.
 async function startApp() {
   resetDates();
   await loadCamp();
-  if (!currentCamp) {
-    // New athlete: start with the setup stage.
-    switchTab("camp");
-    showMessage("camp-message", "Welcome! Set up your camp first.", "ok");
-  }
 }
 
 // Set date boxes to today and pick sensible defaults from the clock.
@@ -812,8 +840,13 @@ async function loadCamp() {
     .order("created_at", { ascending: false }).limit(1);
   currentCamp = result.data && result.data.length ? result.data[0] : null;
   fillCampForm();
-  // Default the combat sport in the Train tab to the camp's sport
-  pickSport(currentCamp ? currentCamp.sport : "muay_thai");
+  pickSport(defaultSport());
+}
+
+// Which sport the Train tab starts on: the camp's sport, otherwise
+// the last sport this athlete logged, otherwise Muay Thai.
+function defaultSport() {
+  return currentCamp ? currentCamp.sport : getSetting("lastSport", "muay_thai");
 }
 
 // Put the saved camp into the form (or clear it for a new camp).
@@ -828,8 +861,9 @@ function fillCampForm() {
   $("c-weigh-in").value     = c ? (c.weigh_in_date || "") : "";
   setChoice("c-weigh-type",   c ? c.weigh_in_type : null);
   $("c-fight").value        = c ? (c.fight_date || "") : "";
-  $("camp-form-title").textContent = c ? "Edit your camp" : "Set up your camp";
+  $("camp-form-title").textContent = c ? "Edit your camp" : "Set up a camp";
   $("camp-new").hidden = !c;
+  $("offseason-note").hidden = !!c;
 }
 
 $("camp-new").addEventListener("click", function () {
@@ -924,6 +958,7 @@ $("morning-form").addEventListener("submit", async function (event) {
     user_id:       currentUser.id,
     date:          $("m-date").value,
     weight_kg:     inputToKg($("m-weight").value, $("m-unit").value),
+    sleep_hours:   sleepToHours($("m-sleep-h").value, $("m-sleep-m").value),
     period_flow:   getChoice("m-flow"),
     symptoms:      getChoices("m-symptoms"),
     sleep_quality: toNumber(getChoice("m-sleep_quality")),
@@ -1155,7 +1190,11 @@ function pickSport(sport) {
   makeChoices("s-components", SPORT_COMPONENTS[sport] || SPORT_COMPONENTS.muay_thai, true);
   $("group-sparring").hidden = true;
 }
-$("s-sport").addEventListener("change", function () { pickSport(getChoice("s-sport")); });
+$("s-sport").addEventListener("change", function () {
+  const sport = getChoice("s-sport");
+  saveSetting("lastSport", sport);   // remember it for next time
+  pickSport(sport);
+});
 
 // Ask how hard the sparring was only when sparring is ticked.
 $("s-components").addEventListener("change", function () {
@@ -1212,7 +1251,7 @@ $("s-another").addEventListener("click", function () {
   setChoice("s-time", "pm");
   $("s-distance-unit").value = getSetting("distanceUnit", "km");
   ["group-combat", "group-run", "group-strength", "group-sparring", "s-another"].forEach(function (id) { $(id).hidden = true; });
-  pickSport(currentCamp ? currentCamp.sport : "muay_thai");
+  pickSport(defaultSport());
   showMessage("session-message", "", "ok");
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
@@ -1264,7 +1303,7 @@ async function loadHistory() {
 
   // Get the three kinds of data for the last 14 days
   const [checkins, food, sessions] = await Promise.all([
-    db.from("daily_checkins").select("date, weight_kg, period_flow, energy, sleep_quality").gte("date", from),
+    db.from("daily_checkins").select("date, weight_kg, sleep_hours, period_flow, energy, sleep_quality").gte("date", from),
     db.from("food_entries").select("date, calories, protein_g").gte("date", from),
     db.from("training_sessions").select("*").gte("date", from).order("created_at")
   ]);
@@ -1299,9 +1338,11 @@ async function loadHistory() {
 
     if (d.checkin) {
       const c = d.checkin;
+      const slept = formatSleep(c.sleep_hours);
       html += '<p>' + formatWeight(c.weight_kg) +
               (c.period_flow && c.period_flow !== "none" ? ' · period: ' + c.period_flow : '') +
-              ' · energy ' + (c.energy || "–") + ' · sleep ' + (c.sleep_quality || "–") + '</p>';
+              '<br>' + (slept ? 'slept ' + slept + ' · ' : '') +
+              'sleep quality ' + (c.sleep_quality || "–") + ' · energy ' + (c.energy || "–") + '</p>';
     }
     if (d.foodCount) {
       html += '<p>' + Math.round(d.kcal) + ' kcal · ' + Math.round(d.protein) + ' g protein</p>';
